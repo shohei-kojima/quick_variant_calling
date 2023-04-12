@@ -1,6 +1,6 @@
 //! This is a simple program that calls variants from RNA-seq and WGS.
 //! This is intended to be used for quick checking of sample swapping by seeing SNVs.
-//! Results from this script is not reliable - should NOT be used as a final dataset.
+//! Results from this script is not very reliable - should NOT be used as a SNV callset.
 
 // Author: Shohei Kojima @ RIKEN
 
