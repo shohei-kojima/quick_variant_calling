@@ -1,0 +1,15 @@
+[package]
+name = "quick_variant_calling"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "3.2.8", features = ["derive"] }
+num_cpus = "1.0"
+rust-htslib = "0.42.0"
+my_rust = { git = "https://github.com/shohei-kojima/my_rust" }
+lazy_static = "1.4"
+regex = "1.3"
+linear-map = "1.2"
