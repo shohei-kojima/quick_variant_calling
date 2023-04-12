@@ -1,10 +1,11 @@
 //! This contains some data structures
 
+use crate::Args;
+use crate::VERSION;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use std::collections::HashMap;
-
 
 /// Stores basic read stats.
 #[derive(Debug)]
@@ -48,11 +49,9 @@ pub struct Depth {
 
 impl Depth {
     pub fn new(length: usize) -> Self {
-        Depth {
-            v: vec![0; length],
-        }
+        Depth { v: vec![0; length] }
     }
-    
+
     pub fn add(&mut self, pos: usize) {
         self.v[pos] += 1;
     }
@@ -72,7 +71,7 @@ impl SNVs {
             pos: Vec::new(),
         }
     }
-    
+
     pub fn add(&mut self, pos: usize, nucl: u8) {
         let index = convert_from_char_to_arr_index(nucl);
         if index == 4 {
@@ -81,13 +80,13 @@ impl SNVs {
         match self.map.get_mut(&pos) {
             Some(arr) => {
                 arr[index] += 1;
-            },
+            }
             None => {
                 let mut arr = [0; 4];
                 arr[index] += 1;
                 self.map.insert(pos, arr);
                 self.pos.push(pos);
-            },
+            }
         };
     }
 }
@@ -101,13 +100,12 @@ fn convert_from_char_to_arr_index(nucl: u8) -> usize {
         71 => 2,  // G
         67 => 3,  // C
         97 => 0,  // a
-        116 => 1,  // t
-        103 => 2,  // g
+        116 => 1, // t
+        103 => 2, // g
         99 => 3,  // c
         _ => 4,
     }
 }
-
 
 /// Stores IO readers and writers.
 pub struct Fstream {
@@ -115,18 +113,37 @@ pub struct Fstream {
 }
 
 impl Fstream {
-    pub fn new(path: &str) -> Self {
-        let filename = PathBuf::from(path);
+    pub fn new(args: &Args) -> Self {
+        let filename = PathBuf::from(&args.o);
         let mut writer = BufWriter::new(File::create(filename.as_path()).unwrap());
 
-        // write sample name
+        // write sample info
+        writer
+            .write_all(format!("#version:{}\n", VERSION).as_bytes())
+            .unwrap();
+        writer
+            .write_all(format!("#input:{}\n", args.i).as_bytes())
+            .unwrap();
+        writer
+            .write_all(format!("#reference:{}\n", args.r).as_bytes())
+            .unwrap();
+        match &args.b {
+            Some(bed) => writer
+                .write_all(format!("#bed:{}\n", bed).as_bytes())
+                .unwrap(),
+            None => writer.write_all(format!("#bed:None\n").as_bytes()).unwrap(),
+        }
+        writer
+            .write_all(format!("#min VAF (-v flag):{}\n", args.v).as_bytes())
+            .unwrap();
+        writer
+            .write_all(format!("#min depth (-d flag):{}\n", args.d).as_bytes())
+            .unwrap();
         writer
             .write_all(format!("chr\tpos\tref\talt\tVAF\tA\tT\tG\tC\tis_multiallelic\n").as_bytes())
             .unwrap();
 
-        Fstream {
-            writer: writer,
-        }
+        Fstream { writer: writer }
     }
 
     pub fn flush_all(&mut self) {

@@ -1,35 +1,35 @@
-//! This is a simple program that converts a BAM/CRAM file into lossy CRAM file with quality scores of Illumina 8-bins
+//! This is a simple program that calls variants from RNA-seq and WGS.
+//! This is intended to be used for quick checking of sample swapping by seeing SNVs.
+//! Results from this script is not reliable - should NOT be used as a final dataset.
 
 // Author: Shohei Kojima @ RIKEN
 
 const VERSION: &str = "version 0.0.1";
-extern crate my_rust;
 extern crate clap;
+extern crate lazy_static;
+extern crate my_rust;
 extern crate num_cpus;
 extern crate rust_htslib;
-extern crate lazy_static;
 
 mod data_structs;
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::exit;
-use std::fs::File;
-use std::io::{BufReader, BufRead};
-use std::io::Write;
 use clap::{AppSettings, Parser};
-use rust_htslib::bam::{IndexedReader, Read};
+use lazy_static::lazy_static;
+use linear_map::LinearMap;
+use regex::Regex;
 use rust_htslib::bam::ext::BamRecordExtensions;
 use rust_htslib::bam::record::{Aux, Cigar, CigarStringView};
-use lazy_static::lazy_static;
-use regex::Regex;
-use linear_map::LinearMap;
-
+use rust_htslib::bam::{IndexedReader, Read};
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
+use std::process::exit;
 
 const MINSEQLEN: usize = 20;
 const MIN_BASE_QUAL: u8 = 20;
 const ATGC: [char; 4] = ['A', 'T', 'G', 'C'];
-
 
 fn main() {
     // initial file checks
@@ -37,7 +37,7 @@ fn main() {
     file_exist_check(&args.i);
     let is_cram = bam_format_check(&args);
     file_absence_check(&args.o, args.n);
-    
+
     // thread number check
     if args.p == 0 {
         eprintln!("Number of threads must be 1 or more.");
@@ -57,23 +57,23 @@ fn main() {
             num_cpus::get()
         );
     }
-    
+
     // make output file
-    let mut fstream = crate::data_structs::Fstream::new(&args.o);
-    
+    let mut fstream = crate::data_structs::Fstream::new(&args);
+
     // make structs
     let mut read_stat = crate::data_structs::ReadStat::new();
-    
+
     // load reference fasta
     let mut ref_fasta = my_rust::io::FastaRecords::from_file(&args.r);
     ref_fasta.to_upper();
-    
+
     // load target regions
     let beds: Vec<(String, i64, i64)> = match args.b {
         Some(path) => from_bed_file(&path),
         None => from_bai(&args.i),
     };
-    
+
     // make infile obj
     let mut infile = IndexedReader::from_path(&args.i).unwrap();
     if is_cram {
@@ -82,20 +82,26 @@ fn main() {
     if args.p >= 2 {
         infile.set_threads(args.p - 1).unwrap();
     }
-    
+
     // read bam, per region/chr analysis
     for (chr, start, end) in beds {
         // load fasta, refseq = &str
         let refseq = match ref_fasta.get_seq(&chr) {
             Some(seq) => seq,
-            None => panic!("chromosome '{}' was not found in the input reference file.", chr),
+            None => panic!(
+                "chromosome '{}' was not found in the input reference file.",
+                chr
+            ),
         };
         let ref_length = refseq.len();
         let refseqbytes: &[u8] = refseq.as_bytes();
         let mut snvs = crate::data_structs::SNVs::new();
         let mut depth = crate::data_structs::Depth::new(ref_length);
         infile.fetch((&chr, start, end)).unwrap();
-        for read in infile.rc_records().map(|x| x.expect("Failure parsing input file")) {
+        for read in infile
+            .rc_records()
+            .map(|x| x.expect("Failure parsing input file"))
+        {
             let mut skip = false;
             read_stat.total += 1;
             if read.is_duplicate() {
@@ -172,20 +178,40 @@ fn main() {
             let index = u8_to_arr_index(refseqbytes[*pos]);
             alts[index] += refcount;
             for (n, vaf) in tmp {
-                fstream.writer
-                    .write_all(format!("{}\t{}\t{}\t{}\t{:.4}\t{}\t{}\t{}\t{}\t{}\n", chr, pos, refbase, ATGC[n], vaf, alts[0], alts[1], alts[2], alts[3], is_multiallelic as u8).as_bytes())
+                fstream
+                    .writer
+                    .write_all(
+                        format!(
+                            "{}\t{}\t{}\t{}\t{:.4}\t{}\t{}\t{}\t{}\t{}\n",
+                            chr,
+                            pos,
+                            refbase,
+                            ATGC[n],
+                            vaf,
+                            alts[0],
+                            alts[1],
+                            alts[2],
+                            alts[3],
+                            is_multiallelic as u8
+                        )
+                        .as_bytes(),
+                    )
                     .unwrap();
             }
         }
     }
     fstream.flush_all(); // dropeed soon automatically
-    read_stat.print();  // read stats
+    read_stat.print(); // read stats
 }
 
 /// convert CigarStringView to vec of ref range
 /// returns spans of alignments: Vec<(ref_pos, read_pos, span)>
 #[inline]
-fn cigar_to_ref_and_read_pos(cigar: &CigarStringView, refstart: i64, refend: i64) -> Vec<(usize, usize, usize)> {
+fn cigar_to_ref_and_read_pos(
+    cigar: &CigarStringView,
+    refstart: i64,
+    refend: i64,
+) -> Vec<(usize, usize, usize)> {
     let mut tmp: Vec<(usize, bool, bool)> = Vec::new(); // (usize, bool, bool) = (length, consume_ref, consume_read)
     for c in (*cigar).iter() {
         match c {
@@ -248,19 +274,23 @@ fn from_bed_file(path: &str) -> Vec<(String, i64, i64)> {
     let fpath = PathBuf::from(path);
     let f = File::open(fpath).expect("input bed file not found.");
     for line in BufReader::new(f).lines() {
-         match line {
-             Ok(line) => {
-                 let ls = line.trim().split("\t").collect::<Vec<&str>>();
-                 if ls.len() < 3 {
-                     panic!("Column number in the bed file is less than 3. Please check the file format again.");
-                 }
-                 let t = (ls[0].to_string(), ls[1].parse::<i64>().unwrap(), ls[2].parse::<i64>().unwrap());
-                 v.push(t);
-             },
-             Err(e) => {
-                 panic!("{}", e);
-             }
-         }
+        match line {
+            Ok(line) => {
+                let ls = line.trim().split("\t").collect::<Vec<&str>>();
+                if ls.len() < 3 {
+                    panic!("Column number in the bed file is less than 3. Please check the file format again.");
+                }
+                let t = (
+                    ls[0].to_string(),
+                    ls[1].parse::<i64>().unwrap(),
+                    ls[2].parse::<i64>().unwrap(),
+                );
+                v.push(t);
+            }
+            Err(e) => {
+                panic!("{}", e);
+            }
+        }
     }
     v
 }
@@ -346,7 +376,10 @@ fn bam_format_check(args: &Args) -> bool {
         }
         "bam" => println!("Input file ({}) is considered as BAM format.", args.i),
         _ => {
-            eprintln!("Input file ({}) does not have extension .bam or .cram", args.i);
+            eprintln!(
+                "Input file ({}) does not have extension .bam or .cram",
+                args.i
+            );
             exit(1);
         }
     }
@@ -381,35 +414,41 @@ fn file_absence_check(file_path: &str, overwrite: u8) {
 #[derive(Parser, Debug)]
 #[clap(author = "Author: Shohei Kojima @ RIKEN", version = VERSION, about = "Converts a BAM/CRAM file to a lossy compressed CRAM file with 8- or 4-binning for quality scores.", setting = AppSettings::DeriveDisplayOrder)]
 #[clap(propagate_version = true)]
-struct Args {
+pub struct Args {
     /// Specify an input file [Required]
     #[clap(short, long, value_parser, value_name = "FILE")]
     pub i: String,
-    
+
     /// Specify an output file [Required]
     #[clap(short, long, value_parser, value_name = "FILE")]
     pub o: String,
-    
+
     /// Specify a refernece genome file [Required]
     #[clap(short, long, value_parser, value_name = "FILE")]
     pub r: String,
-    
+
     /// File containing target regions (.bed file) [Optional]
     #[clap(short, long, value_parser, value_name = "FILE")]
     pub b: Option<String>,
-    
+
     /// Minimal seq depth required to call variant [Optional]
     #[clap(short, long, value_parser, value_name = "NUMBER", default_value_t = 10)]
     pub d: u32,
-    
+
     /// Minimal VAF required to call variant [Optional]
-    #[clap(short, long, value_parser, value_name = "NUMBER", default_value_t = 0.05)]
+    #[clap(
+        short,
+        long,
+        value_parser,
+        value_name = "NUMBER",
+        default_value_t = 0.05
+    )]
     pub v: f64,
-    
+
     /// Number of threads to read BAM/CRAM [Optional]
     #[clap(short, long, value_parser, value_name = "NUMBER", default_value_t = 1)]
     pub p: usize,
-    
+
     /// Specify when you don't want to overwrite [Optional]
     #[clap(short, long, action = clap::ArgAction::Count)]
     pub n: u8,
